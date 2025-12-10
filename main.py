@@ -17,9 +17,10 @@ import time
 
 from run_prediction import AudioDeepfakeDetector
 from mlflow_tracker import MLflowTracker
-from database import init_db
+from database import init_db, get_db
 from auth import router as auth_router, get_current_user
-from models import User
+from models import User, Prediction
+from sqlalchemy.orm import Session
 
 # Configure logging
 logging.basicConfig(
@@ -73,17 +74,10 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Configure CORS for Next.js frontend (local and production)
+# Configure CORS for Next.js frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",           # Local development
-        "http://localhost:3007",           # Local production port
-        "http://143.244.150.120:3000",     # Digital Ocean frontend (port 3000)
-        "http://143.244.150.120:3007",     # Digital Ocean frontend (port 3007)
-        "http://172.31.23.130:3000",       # Internal IP (port 3000)
-        "http://172.31.23.130:3007",       # Internal IP (port 3007)
-    ],
+    allow_origins=["http://localhost:3000"],  # Next.js default port
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -204,6 +198,35 @@ async def predict_audio(
         
         logger.info(f"Prediction: {response['final_prediction']} ({response['final_confidence']}%)")
         
+        # Save prediction to database
+        try:
+            from database import SessionLocal
+            db = SessionLocal()
+            prediction_record = Prediction(
+                user_id=current_user.id,
+                filename=file.filename,
+                file_size_bytes=response['file_size_bytes'],
+                duration_seconds=response['duration_seconds'],
+                final_prediction=response['final_prediction'],
+                final_confidence=response['final_confidence'],
+                confidence_level=response['confidence_level'],
+                models_agree=response['models_agree'],
+                rf_prediction=response['predictions']['random_forest']['prediction'],
+                rf_confidence=response['predictions']['random_forest']['confidence'],
+                cnn_prediction=response['predictions']['cnn']['prediction'],
+                cnn_confidence=response['predictions']['cnn']['confidence'],
+                ensemble_prediction=response['predictions']['ensemble']['prediction'],
+                ensemble_confidence=response['predictions']['ensemble']['confidence'],
+                num_chunks=response['num_chunks'],
+                processing_time=processing_time
+            )
+            db.add(prediction_record)
+            db.commit()
+            db.close()
+            logger.info(f"Prediction saved to database for user {current_user.username}")
+        except Exception as e:
+            logger.warning(f"Failed to save prediction to database: {e}")
+        
         # Log to MLflow
         if mlflow_tracker:
             try:
@@ -224,6 +247,91 @@ async def predict_audio(
                 os.unlink(temp_file)
             except Exception as e:
                 logger.warning(f"Failed to delete temp file: {e}")
+
+
+@app.get("/history")
+async def get_prediction_history(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    limit: int = 50
+):
+    """
+    Get prediction history for the current user
+    """
+    try:
+        predictions = db.query(Prediction).filter(
+            Prediction.user_id == current_user.id
+        ).order_by(Prediction.created_at.desc()).limit(limit).all()
+        
+        history = []
+        for pred in predictions:
+            history.append({
+                "id": pred.id,
+                "filename": pred.filename,
+                "file_size_bytes": pred.file_size_bytes,
+                "duration_seconds": pred.duration_seconds,
+                "final_prediction": pred.final_prediction,
+                "final_confidence": pred.final_confidence,
+                "confidence_level": pred.confidence_level,
+                "models_agree": pred.models_agree,
+                "predictions": {
+                    "random_forest": {
+                        "prediction": pred.rf_prediction,
+                        "confidence": pred.rf_confidence
+                    },
+                    "cnn": {
+                        "prediction": pred.cnn_prediction,
+                        "confidence": pred.cnn_confidence
+                    },
+                    "ensemble": {
+                        "prediction": pred.ensemble_prediction,
+                        "confidence": pred.ensemble_confidence
+                    }
+                },
+                "num_chunks": pred.num_chunks,
+                "processing_time": pred.processing_time,
+                "created_at": pred.created_at.isoformat() if pred.created_at else None
+            })
+        
+        return {
+            "total": len(history),
+            "history": history
+        }
+    except Exception as e:
+        logger.error(f"Failed to fetch prediction history: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch prediction history")
+
+
+@app.get("/stats")
+async def get_user_stats(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get prediction statistics for the current user
+    """
+    try:
+        predictions = db.query(Prediction).filter(
+            Prediction.user_id == current_user.id
+        ).all()
+        
+        total_predictions = len(predictions)
+        bonafide_count = sum(1 for p in predictions if p.final_prediction == "BONAFIDE")
+        spoof_count = sum(1 for p in predictions if p.final_prediction == "SPOOF")
+        
+        avg_confidence = sum(p.final_confidence for p in predictions) / total_predictions if total_predictions > 0 else 0
+        
+        return {
+            "total_predictions": total_predictions,
+            "bonafide_count": bonafide_count,
+            "spoof_count": spoof_count,
+            "average_confidence": round(avg_confidence, 2),
+            "bonafide_percentage": round((bonafide_count / total_predictions * 100), 2) if total_predictions > 0 else 0,
+            "spoof_percentage": round((spoof_count / total_predictions * 100), 2) if total_predictions > 0 else 0
+        }
+    except Exception as e:
+        logger.error(f"Failed to fetch user stats: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch statistics")
 
 
 def _get_confidence_level(confidence: float) -> str:
