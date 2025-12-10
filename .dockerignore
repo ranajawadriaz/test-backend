@@ -1,0 +1,10 @@
+# Ignore test audio files and results to reduce image size
+bonafide_*.flac
+spoof_*.flac
+spoof_*.mp3
+*.json
+TEST_RESULTS.md
+RESULTS_SUMMARY.txt
+__pycache__/
+*.pyc
+.pytest_cache/
