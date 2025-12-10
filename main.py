@@ -79,7 +79,10 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",           # Local development
         "http://localhost:3007",           # Local production port
-        "http://143.244.150.120:3007",     # Digital Ocean frontend
+        "http://143.244.150.120:3000",     # Digital Ocean frontend (port 3000)
+        "http://143.244.150.120:3007",     # Digital Ocean frontend (port 3007)
+        "http://172.31.23.130:3000",       # Internal IP (port 3000)
+        "http://172.31.23.130:3007",       # Internal IP (port 3007)
     ],
     allow_credentials=True,
     allow_methods=["*"],

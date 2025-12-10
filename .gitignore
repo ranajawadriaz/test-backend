@@ -28,10 +28,10 @@ venv/
 ENV/
 env/
 
-# Environment variables
-.env
+# Environment variables (excluding production .env which is committed)
+# .env is now committed for production use
 .env.local
-.env.production
+.env.development
 
 # IDEs
 .vscode/
